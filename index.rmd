@@ -1,0 +1,13 @@
+---
+title: "Kate's Website"
+---
+
+This is markdown
+
+  * I can include bullets
+  
+## I can include headers
+
+<img src = "/Users/katebyr/Documents/STA 679/website-demo/Screen Shot 2019-01-18 at 5.03.05 PM.png">
+
+I can include <i> html</i>

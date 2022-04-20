@@ -1,0 +1,16 @@
+name: "Kates-website"
+navbar: 
+  title: "Welcome to my website"
+  left: 
+    - text: "Home"
+      href: index.html
+    - text: "Analysis"
+      href: analysis.html
+  right: 
+    - icon: fa-github fa-lg
+      href: https://github.com/lucymcgowan 
+    - icon: fa-twitter fa-lg
+      href: https://github.com/lucymcgowan
+output:
+  html_document:
+    theme: flatly

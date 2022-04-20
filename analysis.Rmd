@@ -1,0 +1,427 @@
+---
+title: "Lab 03 - Using Propensity Scores"
+output: github_document
+author: "Kate Boyer"
+date: '2022-03-29'
+---
+
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(smd)
+```
+
+## Exercise 1
+
+```{r, message = FALSE, warning = FALSE}
+coffeetown <- read_csv("coffee_town_df.csv")
+summary(coffeetown)
+head(coffeetown)
+```
+
+This data set contains 5 variables:coffee_town(Y/N), cups_of_coffee(0-6), age, job(none, easy, hard), and smoke(Y/N) and 1100 observations. There are 1100 observations total, 113 are in the exposure group (live in coffee town) and 987 in the control group. There is no missing data. 
+
+
+
+## Exercise 2
+
+```{r}
+library(gtsummary)
+coffeetown %>%
+  tbl_summary(
+    by = coffee_town, 
+    include = c(
+      "cups_of_coffee", 
+      "age", 
+      "job",
+      "smoke")) %>%
+  add_overall()
+
+```
+It seems that people in coffee town either have 0 cups of coffee or more than 3, compared to people who live elsewhere often have more moderate amount in between. Those in coffee town are also older and there is a much wider range of ages. People have harder jobs, on average, in coffe town, and current and history of smoking is way less prevalent. 
+
+## Exercise 3
+
+```{r}
+
+library(broom)
+
+coffeetown_plot=
+glm(coffee_town ~  age + job + smoke, data=coffeetown,
+     family=binomial)%>%
+  augment(type.predict = "response",
+          data = coffeetown)
+
+coffeetown_plot %>% 
+  select(coffee_town, .fitted)
+```
+
+
+```{r}
+library(ggplot2)
+
+df_plot_ps <- coffeetown_plot %>%
+  tidyr::pivot_wider(names_from = coffee_town, 
+                     values_from = .fitted, 
+                     names_prefix = "ct_p")
+
+
+ggplot(df_plot_ps) +
+  geom_histogram(bins = 50, 
+                 aes(x = ct_p1), 
+                 fill = "cornflower blue") + 
+  geom_histogram(bins = 50, 
+                 aes(x = ct_p0, 
+                     y = - stat(count)), 
+                 fill = "orange") + 
+  scale_y_continuous("count", label = abs) + 
+  scale_x_continuous("propensity score") + 
+  geom_label(
+    label = "Coffee Town Resident", 
+    x = 0.5,
+    y = 20,
+  ) + 
+  geom_label(
+    label = "Non-Resident",
+    x = 0.3, 
+    y = -100
+  ) + 
+  theme_minimal()+ggtitle("ATO un-Weighted Histogram ")
+
+
+```
+
+
+There is a large cluster of propensity scores from 0 to 0.1 among the control group. The exposed group has two clusters from 0 to 0.1 and from 0.25 to 0.35. There is a good amount of overlap between the two groups, which will be helpful for doing inference on the equipose population. 
+
+
+## Exercise 4
+
+```{r}
+
+glm(coffee_town ~  age + job + smoke, data=coffeetown,
+     family=binomial)%>%
+  augment(type.predict = "response",
+          data = coffeetown_plot) %>%
+  mutate(ato_wts = (1-.fitted)*coffee_town  +
+              (1 - coffee_town) *  .fitted
+ )  -> coffeetown
+```
+
+I calculated ATO weights since the investigators are interested in causal effect in the equipoise population. We will use the weights to estimate the causal effect among those who are not strongly likely to end up in either town. This will give us an understanding of whether moving to coffee town increases your coffee consumption for those who are not extremely likely to live there, but are also not extremely likely to live somewhere else. 
+
+## Exercise 5
+
+```{r}
+library(survey)
+library(gtsummary)
+
+svy_des <- svydesign(
+      ids = ~ 1,
+  data = coffeetown,
+  weights = ~ ato_wts
+)
+svy_des %>%
+  tbl_svysummary(
+    by = coffee_town, 
+    include = c(
+      "cups_of_coffee", 
+      "age", 
+      "job",
+      "smoke")) %>%
+  add_overall()
+```
+
+The weighted table 1 only has 182 observations compared to the 1100 in our original unweighted table 1. There are now an equal number of observations in each treatment arm, and all of the potential confounders have similar distributions between the exposed and unexposed groups except for age. 
+
+## Exercise 6
+
+```{r}
+df_plot_ps <- coffeetown %>%
+  tidyr::pivot_wider(names_from = coffee_town, 
+                     values_from = .fitted, 
+                     names_prefix = "ct_p")
+
+ 
+ggplot(df_plot_ps) +
+  geom_histogram(bins = 50, alpha = 0.5,
+                 aes(x = ct_p1), 
+                 fill = "cornflower blue") + 
+  geom_histogram(bins = 50,  
+                  
+                 aes(x = ct_p1, 
+                     weight = ato_wts),  
+                 fill = "cornflower blue") +
+  geom_histogram(bins = 50, alpha = 0.5,
+                 aes(x = ct_p0, 
+                     y = - stat(count)),
+                 fill = "orange") + 
+  geom_histogram(bins = 50,
+                 
+                 aes(x = ct_p0,
+                     weight = ato_wts,
+                     y = - stat(count)),
+                 fill = "orange") + 
+  scale_y_continuous("count", label = abs) + 
+  scale_x_continuous("propensity score") +
+  geom_label(
+    label = "Coffee Town Resident", 
+    x = 0.5,
+    y = 30,
+  )  + geom_label(
+    label = "Non-Resident",
+    x = 0.25, 
+    y = -100
+  ) +ggtitle("ATO Weighted Histogram")
+```
+
+We see from the histogram that those in the groups they are highly likely to be in are severely weighted down, notice bar furthest to the left in the non-resident section is weighted down to basically zero. Those who are residents with low propensity scores, are not likely to be residents, so they are not weighted down hardly at all, notice the cluster on the left in the resident section. 
+
+## Exercise 7
+
+```{r}
+smds <- coffeetown %>% 
+  summarise( 
+    across( 
+      c(age, job, smoke ),
+      list(
+        unweighted = ~smd(.x, coffee_town)$estimate,
+        ato.weighted = ~smd(.x, coffee_town, ato_wts)$estimate
+      )
+    )
+  )
+
+
+```
+
+```{r}
+plot_df <- smds %>% 
+  pivot_longer( 
+    everything(),
+    values_to = "SMD", 
+    names_to = c("variable", "Method"),
+    names_pattern = "(.*)_(.*)"
+  ) %>%
+  arrange(desc(Method), abs(SMD)) %>%
+  mutate(variable = fct_inorder(variable))
+```
+
+
+
+```{r}
+ggplot(
+  data = plot_df,
+  aes(x = abs(SMD), y = variable, 
+      group = Method, color = Method)
+) +  
+  geom_line(orientation = "y") +
+  geom_point() + 
+  geom_vline(xintercept = 0.1,  
+             color = "black", size = 0.1)+ggtitle("Love Plot for SMDs")
+
+
+```
+
+The standardized mean differences were all above our threshold of 0.1 before applying the ATO weights. Once we applied the weights, the three confounding variables were all perfectly balanced on the mean, as we would expect since we included all three variables in out propensity score model. 
+
+## Exercise 8
+
+```{r}
+ggplot(coffeetown, 
+       aes(x = age, group = coffee_town, 
+           color = factor(coffee_town))) +
+  stat_ecdf() +
+  scale_color_manual("Coffee Town Resident", 
+                     values = c("#5154B8", "#5DB854"),
+                     labels = c("No", "Yes")) + 
+  scale_x_continuous("Age") + 
+  ylab("Proportion <= x")+ggtitle("Un-Weighted ECDF plot")
+
+
+```
+
+```{r}
+ecdf_1 <- coffeetown %>%
+  filter(coffee_town == 1) %>%
+  arrange(age) %>%
+  mutate(cum_pct = cumsum(ato_wts) / sum(ato_wts))
+ecdf_0 <- coffeetown %>%
+  filter(coffee_town == 0) %>%
+  arrange(age) %>%
+  mutate(cum_pct = cumsum(ato_wts) / sum(ato_wts))
+plot=ggplot(ecdf_1, aes(x = age, y = cum_pct), group=coffee_town, color=coffee_town) +
+  geom_line(color = "#5DB854") +
+  geom_line(data = ecdf_0,
+            aes(x = age, y = cum_pct),
+            color = "#5154B8") + ylab("Proportion <= x") +xlab("Age") +
+  annotate(geom ="label", x= 50, y=.25, label="Coffee Town Residents", color="#5DB854") +
+  annotate(geom ="label", x= 30, y=.75, label="Non-Residents", color="#5154B8")+ggtitle("Weighted ECDF Plot")
+
+plot
+```
+
+The empirical distribution of age in coffee town does not look very similar to that in the control group, even after applying the weights where we included age in our propensity score model. It looks like the residents of coffee town are all below 20 or above 49, with no residents between these ages. The control group seems to have a distribution of ages that includes many ages in the range of 10 to 60. Our propensity score model treated age as a linear predictor, but this plot indicates it may be more appropriate to include a natural spline term instead. 
+
+
+## Exercise 9
+
+```{r}
+
+glm(coffee_town ~  splines::ns(age, 3) + job + smoke, data=coffeetown,
+     family=binomial)%>%
+  augment(type.predict = "response",
+          data = coffeetown_plot) %>%
+  mutate(ato_wts = (1-.fitted)*coffee_town  +
+              (1 - coffee_town) *  .fitted
+ )  -> coffeetown
+```
+
+In this propensity score model, I created a natural spline for age based on the weighted ecdf plot above. 
+
+```{r}
+df_plot_ps <- coffeetown %>%
+  tidyr::pivot_wider(names_from = coffee_town, 
+                     values_from = .fitted, 
+                     names_prefix = "ct_p")
+
+ 
+ggplot(df_plot_ps) +
+  geom_histogram(bins = 50,    alpha = 0.5, 
+                 aes(x = ct_p1), 
+                 fill = "cornflower blue") + 
+  geom_histogram(bins = 50,  
+              
+                 aes(x = ct_p1, 
+                     weight = ato_wts),  
+                 fill = "cornflower blue") +
+  geom_histogram(bins = 50,  alpha = 0.5,
+                 aes(x = ct_p0, 
+                     y = - stat(count)),
+                 fill = "orange") + 
+  geom_histogram(bins = 50,
+                
+                 aes(x = ct_p0,
+                     weight = ato_wts,
+                     y = - stat(count)),
+                 fill = "orange") + 
+  scale_y_continuous("count", label = abs) + 
+  scale_x_continuous("propensity score") +
+  geom_label(
+    label = "Coffee Town Residents", 
+    x = 0.5,
+    y = 40,
+  )  + geom_label(
+    label = "Non-Residents",
+    x = 0.25, 
+    y = -100
+  ) +ggtitle("ATO Weighted Histogram with Natural Spline")
+```
+
+The propensity scores now range from 0 to 1, and before adding the natural spline the range was 0 to 0.6. Most of the ATO weights are very small, which explains why you can't see the bars for the weighted histogram hardly at all. The ATO weights are so small once we appropriately account for age because residents all live in the city which they are very likely to according to the propensity score model. 
+
+
+```{r}
+smds <- coffeetown %>% 
+  summarise( 
+    across( 
+      c(age, job, smoke ),
+      list(
+        unweighted = ~smd(.x, coffee_town)$estimate,
+        ato.weighted = ~smd(.x, coffee_town, ato_wts)$estimate
+      )
+    )
+  )
+
+
+```
+
+```{r}
+plot_df <- smds %>% 
+  pivot_longer( 
+    everything(),
+    values_to = "SMD", 
+    names_to = c("variable", "Method"),
+    names_pattern = "(.*)_(.*)"
+  ) %>%
+  arrange(desc(Method), abs(SMD)) %>%
+  mutate(variable = fct_inorder(variable))
+```
+
+
+
+```{r}
+ggplot(
+  data = plot_df,
+  aes(x = abs(SMD), y = variable, 
+      group = Method, color = Method)
+) +  
+  geom_line(orientation = "y") +
+  geom_point() + 
+  geom_vline(xintercept = 0.1,  
+             color = "black", size = 0.1)+ggtitle("Love Plot with Natural Spline")
+
+
+```
+
+The standardized mean differences after applying the ato weights are still all zero, as we would expect.  
+
+```{r}
+ecdf_1 <- coffeetown %>%
+  filter(coffee_town == 1) %>%
+  arrange(age) %>%
+  mutate(cum_pct = cumsum(ato_wts) / sum(ato_wts))
+ecdf_0 <- coffeetown %>%
+  filter(coffee_town == 0) %>%
+  arrange(age) %>%
+  mutate(cum_pct = cumsum(ato_wts) / sum(ato_wts))
+ggplot(ecdf_1, aes(x = age, y = cum_pct)) +
+  geom_line(color = "#5DB854") +
+  geom_line(data = ecdf_0,
+            aes(x = age, y = cum_pct),
+            color = "#5154B8") +
+  xlab("Age") + 
+  ylab("Proportion <= x") +
+  annotate(geom ="label", x= 30, y=.25, label="Coffee Town Residents", color="#5DB854") +
+  annotate(geom ="label", x= 30, y=.75, label="Non-Residents", color="#5154B8") +ggtitle( "Weighted ECDF Plot with Natural Spline")
+
+
+```
+
+This ecdf looks much better with the empirical distributions of age looking very similar among the exposed and control groups. 
+
+## Exercise 10
+
+```{r}
+coffeetown%>%summarise((sum(coffee_town*cups_of_coffee*ato_wts)/sum(coffee_town*ato_wts))-(sum((1-coffee_town)*cups_of_coffee*ato_wts)/sum((1-coffee_town)*ato_wts)))
+```
+
+
+After appropriately adjusting for the confounders of age, job, and smoking status, there is no causal effect of living in coffee town on how many cups of coffee someone drinks. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
